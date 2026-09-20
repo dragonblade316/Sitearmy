@@ -1,0 +1,17 @@
+services:
+  sitearmy:
+    build:
+      context: ..
+    restart: unless-stopped
+    environment:
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./sites.toml:/etc/sitearmy/sites.toml:ro
+      - caddy-data:/data
+
+volumes:
+  caddy-data:

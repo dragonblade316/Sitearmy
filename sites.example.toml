@@ -1,0 +1,8 @@
+["example.com"]
+git = "https://github.com/example/site.git"
+builder = "raw"
+
+["blog.example.com"]
+git = "https://github.com/example/blog.git"
+builder = "hugo"
+root = "sites/blog"
