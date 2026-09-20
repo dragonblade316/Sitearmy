@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     environment:
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      SITEARMY_HTTPS: "${SITEARMY_HTTPS:-true}"
     ports:
       - "80:80"
       - "443:443"

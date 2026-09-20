@@ -17,6 +17,15 @@ HOSTNAME_PATTERN = re.compile(
 )
 
 
+def https_enabled() -> bool:
+    value = os.environ.get("SITEARMY_HTTPS", "true").lower()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ValueError("SITEARMY_HTTPS must be true or false")
+
+
 def load_sites() -> dict[str, dict[str, str]]:
     with CONFIG_PATH.open("rb") as config_file:
         sites = tomllib.load(config_file)
@@ -84,11 +93,12 @@ def build_sites(sites: dict[str, dict[str, str]]) -> None:
             BUILDERS[site["builder"]](site_root, destination)
 
 
-def write_caddyfile(sites: dict[str, dict[str, str]]) -> None:
+def write_caddyfile(sites: dict[str, dict[str, str]], use_https: bool) -> None:
     blocks = []
     for index, hostname in enumerate(sites):
+        address = hostname if use_https else f"http://{hostname}"
         blocks.append(
-            f"{hostname} {{\n"
+            f"{address} {{\n"
             f"\troot * {OUTPUT_ROOT / str(index)}\n"
             "\tfile_server\n"
             "}"
@@ -101,7 +111,7 @@ def write_caddyfile(sites: dict[str, dict[str, str]]) -> None:
 def main() -> None:
     sites = load_sites()
     build_sites(sites)
-    write_caddyfile(sites)
+    write_caddyfile(sites, https_enabled())
 
     subprocess.run(
         ["caddy", "validate", "--config", str(CADDYFILE_PATH), "--adapter", "caddyfile"],
