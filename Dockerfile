@@ -1,6 +1,6 @@
 FROM docker.io/library/caddy:2 AS caddy
 
-FROM docker.io/library/debian:bookworm-slim
+FROM docker.io/library/node:22-bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

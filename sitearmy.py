@@ -95,11 +95,17 @@ def build_sites(sites: dict[str, dict[str, str]]) -> None:
 
 def write_caddyfile(sites: dict[str, dict[str, str]], use_https: bool) -> None:
     blocks = []
-    for index, hostname in enumerate(sites):
+    for index, (hostname, site) in enumerate(sites.items()):
         address = hostname if use_https else f"http://{hostname}"
+        quartz_routes = (
+            "\ttry_files {path} {path}.html {path}/ =404\n"
+            if site["builder"] == "quartz"
+            else ""
+        )
         blocks.append(
             f"{address} {{\n"
             f"\troot * {OUTPUT_ROOT / str(index)}\n"
+            f"{quartz_routes}"
             "\tfile_server\n"
             "}"
         )
