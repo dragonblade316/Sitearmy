@@ -1,21 +1,22 @@
 FROM docker.io/library/caddy:2 AS caddy
 
-FROM docker.io/library/node:22-bookworm-slim
+# Alpine edge is rolling; package updates may introduce incompatible builder versions.
+FROM docker.io/library/alpine:edge
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
+RUN apk add --no-cache \
+        build-base \
         ca-certificates \
         git \
         hugo \
         jekyll \
         libffi-dev \
-        libyaml-dev \
+        nodejs \
+        npm \
+        python3 \
         ruby-bundler \
         ruby-dev \
-        zlib1g-dev \
-        python3 \
-    && rm -rf /var/lib/apt/lists/*
+        yaml-dev \
+        zlib-dev
 
 COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
 COPY sitearmy.py /opt/sitearmy/sitearmy.py
