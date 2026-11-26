@@ -15,4 +15,26 @@ SiteArmy supports the following static site generators:
 
 The app is made in such a way that adding new builders is fairly trivial so I may add support for more static sites.
 
+## Updating sites
+
+Set `api_token` before the site tables in `sites.toml`:
+
+```toml
+api_token = "replace-with-a-long-random-token"
+```
+
+Trigger an asynchronous update check with:
+
+```sh
+curl -X POST -H "X-API-Key: replace-with-a-long-random-token" https://example.com/_sitearmy/update
+```
+
+SiteArmy checks each repository's current HEAD and rebuilds only sites whose commit changed. Check build status with:
+
+```sh
+curl -H "X-API-Key: replace-with-a-long-random-token" https://example.com/_sitearmy/status
+```
+
+Only one update check can run at a time. A failed rebuild leaves the previously built site in place and reports the error through the status endpoint.
+
 Tbf, this was done in a couple hours and I don't think many people are going to want it much but I figure it is worth throwing out for those who might have similar needs to me.

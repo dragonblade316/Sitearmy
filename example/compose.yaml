@@ -4,7 +4,9 @@ services:
       context: ..
     restart: unless-stopped
     environment:
+      BUNDLE_PATH: /data/sitearmy/cache/bundle
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      NPM_CONFIG_CACHE: /data/sitearmy/cache/npm
       SITEARMY_HTTPS: "${SITEARMY_HTTPS:-true}"
     ports:
       - "80:80"

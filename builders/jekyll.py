@@ -8,7 +8,7 @@ def build(source: Path, destination: Path) -> None:
     command = ["jekyll"]
 
     if (source / "Gemfile").is_file():
-        environment["BUNDLE_PATH"] = str(source.parent / "bundle")
+        environment.setdefault("BUNDLE_PATH", str(source.parent / "bundle"))
         subprocess.run(["bundle", "install"], cwd=source, env=environment, check=True)
         command = ["bundle", "exec", "jekyll"]
 

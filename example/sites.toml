@@ -1,3 +1,5 @@
+api_token = "replace-with-a-long-random-token"
+
 ["example.com"]
 git = "https://github.com/example/site.git"
 builder = "raw"
