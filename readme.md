@@ -37,4 +37,6 @@ curl -H "X-API-Key: replace-with-a-long-random-token" https://example.com/_sitea
 
 Only one update check can run at a time. A failed rebuild leaves the previously built site in place and reports the error through the status endpoint.
 
+Built sites, deployment state, Caddy data, and dependency caches are stored in the `/data` volume. On startup, SiteArmy checks each repository and reuses its existing build when the repository and site configuration have not changed.
+
 Tbf, this was done in a couple hours and I don't think many people are going to want it much but I figure it is worth throwing out for those who might have similar needs to me.

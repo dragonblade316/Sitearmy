@@ -1,8 +1,8 @@
+import hashlib
 import hmac
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import tempfile
@@ -15,7 +15,9 @@ from pathlib import Path
 from builders import BUILDERS
 
 CONFIG_PATH = Path("/etc/sitearmy/sites.toml")
-OUTPUT_ROOT = Path("/srv/sitearmy")
+DATA_ROOT = Path("/data/sitearmy")
+OUTPUT_ROOT = DATA_ROOT / "sites"
+BUILD_STATE_PATH = DATA_ROOT / "state.json"
 CADDYFILE_PATH = Path("/run/sitearmy/Caddyfile")
 API_HOST = "127.0.0.1"
 API_PORT = 8080
@@ -76,6 +78,59 @@ def git_command() -> list[str]:
 
 def current_time() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def site_output_path(hostname: str) -> Path:
+    return OUTPUT_ROOT / hostname.replace("*", "_wildcard_")
+
+
+def site_fingerprint(site: dict[str, str]) -> str:
+    configuration = {
+        "git": site["git"],
+        "builder": site["builder"],
+        "root": site.get("root", "."),
+    }
+    content = json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
+def load_build_state() -> dict[str, dict[str, str | None]]:
+    try:
+        state = json.loads(BUILD_STATE_PATH.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"Ignoring invalid build state: {error}", flush=True)
+        return {}
+
+    sites = state.get("sites") if isinstance(state, dict) else None
+    if not isinstance(sites, dict):
+        return {}
+    return {
+        hostname: entry
+        for hostname, entry in sites.items()
+        if isinstance(hostname, str) and isinstance(entry, dict)
+    }
+
+
+def save_build_state(state: dict[str, dict[str, str | None]]) -> None:
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    temporary_path = BUILD_STATE_PATH.with_suffix(".tmp")
+    temporary_path.write_text(json.dumps({"sites": state}, indent=2) + "\n")
+    temporary_path.replace(BUILD_STATE_PATH)
+
+
+def valid_cached_build(
+    hostname: str,
+    site: dict[str, str],
+    entry: dict[str, str | None] | None,
+) -> bool:
+    return bool(
+        entry
+        and isinstance(entry.get("deployed_commit"), str)
+        and entry.get("config_fingerprint") == site_fingerprint(site)
+        and site_output_path(hostname).is_dir()
+    )
 
 
 def remote_commit(git_url: str) -> str:
@@ -142,27 +197,84 @@ def build_site(
     return commit
 
 
-def build_sites(
+def initialize_sites(
     sites: dict[str, dict[str, str]],
-) -> dict[str, dict[str, str | None]]:
-    shutil.rmtree(OUTPUT_ROOT, ignore_errors=True)
-    OUTPUT_ROOT.mkdir(parents=True)
+) -> tuple[
+    dict[str, dict[str, str | None]],
+    dict[str, dict[str, str | None]],
+]:
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    stored_state = load_build_state()
+    build_state = {
+        hostname: stored_state[hostname]
+        for hostname, site in sites.items()
+        if valid_cached_build(hostname, site, stored_state.get(hostname))
+    }
     statuses = {}
 
-    for index, (hostname, site) in enumerate(sites.items()):
-        commit = build_site(hostname, site, OUTPUT_ROOT / str(index))
-        timestamp = current_time()
+    for hostname, site in sites.items():
+        cached = build_state.get(hostname)
+        deployed_commit = cached.get("deployed_commit") if cached else None
         statuses[hostname] = {
             "builder": site["builder"],
-            "state": "ready",
-            "deployed_commit": commit,
-            "remote_commit": commit,
-            "last_checked_at": timestamp,
-            "last_built_at": timestamp,
+            "state": "checking",
+            "deployed_commit": deployed_commit,
+            "remote_commit": deployed_commit,
+            "last_checked_at": None,
+            "last_built_at": cached.get("last_built_at") if cached else None,
             "error": None,
         }
 
-    return statuses
+        if cached:
+            try:
+                latest_commit = remote_commit(site["git"])
+                statuses[hostname].update(
+                    remote_commit=latest_commit,
+                    last_checked_at=current_time(),
+                )
+                if latest_commit == deployed_commit:
+                    statuses[hostname]["state"] = "ready"
+                    continue
+            except Exception as error:
+                print(f"Failed to check {hostname}: {error}", flush=True)
+                statuses[hostname].update(
+                    state="failed",
+                    last_checked_at=current_time(),
+                    error=str(error),
+                )
+                continue
+
+        try:
+            statuses[hostname]["state"] = "building"
+            commit = build_site(hostname, site, site_output_path(hostname))
+        except Exception as error:
+            if not cached:
+                raise
+            print(f"Failed to update {hostname}: {error}", flush=True)
+            statuses[hostname].update(
+                state="failed",
+                last_checked_at=current_time(),
+                error=str(error),
+            )
+            continue
+
+        timestamp = current_time()
+        statuses[hostname].update(
+            state="ready",
+            deployed_commit=commit,
+            remote_commit=commit,
+            last_checked_at=timestamp,
+            last_built_at=timestamp,
+        )
+        build_state[hostname] = {
+            "config_fingerprint": site_fingerprint(site),
+            "deployed_commit": commit,
+            "last_built_at": timestamp,
+        }
+        save_build_state(build_state)
+
+    save_build_state(build_state)
+    return statuses, build_state
 
 
 class SiteManager:
@@ -170,9 +282,11 @@ class SiteManager:
         self,
         sites: dict[str, dict[str, str]],
         statuses: dict[str, dict[str, str | None]],
+        build_state: dict[str, dict[str, str | None]],
     ) -> None:
         self.sites = sites
         self.statuses = statuses
+        self.build_state = build_state
         self.lock = threading.Lock()
         self.update_in_progress = False
 
@@ -199,9 +313,29 @@ class SiteManager:
         with self.lock:
             self.statuses[hostname].update(changes)
 
+    def record_build(self, hostname: str, commit: str) -> None:
+        timestamp = current_time()
+        with self.lock:
+            self.statuses[hostname].update(
+                state="ready",
+                deployed_commit=commit,
+                remote_commit=commit,
+                last_built_at=timestamp,
+            )
+            self.build_state[hostname] = {
+                "config_fingerprint": site_fingerprint(self.sites[hostname]),
+                "deployed_commit": commit,
+                "last_built_at": timestamp,
+            }
+            state = {
+                site_hostname: dict(entry)
+                for site_hostname, entry in self.build_state.items()
+            }
+        save_build_state(state)
+
     def update_sites(self) -> None:
         try:
-            for index, (hostname, site) in enumerate(self.sites.items()):
+            for hostname, site in self.sites.items():
                 self.set_status(hostname, state="checking", error=None)
                 print(f"Checking {hostname} for updates", flush=True)
 
@@ -225,15 +359,9 @@ class SiteManager:
                     deployed_commit = build_site(
                         hostname,
                         site,
-                        OUTPUT_ROOT / str(index),
+                        site_output_path(hostname),
                     )
-                    self.set_status(
-                        hostname,
-                        state="ready",
-                        deployed_commit=deployed_commit,
-                        remote_commit=deployed_commit,
-                        last_built_at=current_time(),
-                    )
+                    self.record_build(hostname, deployed_commit)
                 except Exception as error:
                     print(f"Failed to update {hostname}: {error}", flush=True)
                     self.set_status(
@@ -294,7 +422,7 @@ def api_handler(manager: SiteManager, api_token: str) -> type[BaseHTTPRequestHan
 
 def write_caddyfile(sites: dict[str, dict[str, str]], use_https: bool) -> None:
     blocks = []
-    for index, (hostname, site) in enumerate(sites.items()):
+    for hostname, site in sites.items():
         address = hostname if use_https else f"http://{hostname}"
         quartz_routes = (
             "\t\ttry_files {path} {path}.html {path}/ =404\n"
@@ -307,7 +435,7 @@ def write_caddyfile(sites: dict[str, dict[str, str]], use_https: bool) -> None:
             f"\t\treverse_proxy {API_HOST}:{API_PORT}\n"
             "\t}\n"
             "\thandle {\n"
-            f"\t\troot * {OUTPUT_ROOT / str(index)}\n"
+            f"\t\troot * {site_output_path(hostname)}\n"
             f"{quartz_routes}"
             "\t\tfile_server\n"
             "\t}\n"
@@ -320,7 +448,7 @@ def write_caddyfile(sites: dict[str, dict[str, str]], use_https: bool) -> None:
 
 def main() -> None:
     sites, api_token = load_config()
-    statuses = build_sites(sites)
+    statuses, build_state = initialize_sites(sites)
     write_caddyfile(sites, https_enabled())
 
     subprocess.run(
@@ -328,7 +456,7 @@ def main() -> None:
         check=True,
     )
 
-    manager = SiteManager(sites, statuses)
+    manager = SiteManager(sites, statuses, build_state)
     server = ThreadingHTTPServer((API_HOST, API_PORT), api_handler(manager, api_token))
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()

@@ -24,12 +24,15 @@ COPY github-credential-helper /opt/sitearmy/github-credential-helper
 COPY builders /opt/sitearmy/builders
 
 RUN chmod 700 /opt/sitearmy/github-credential-helper \
-    && mkdir -p /etc/sitearmy /run/sitearmy /srv/sitearmy /data /config
+    && mkdir -p /etc/sitearmy /run/sitearmy /data/sitearmy/sites /data/config
 
-ENV XDG_CONFIG_HOME=/config
+ENV BUNDLE_PATH=/data/sitearmy/cache/bundle
+ENV NPM_CONFIG_CACHE=/data/sitearmy/cache/npm
+ENV XDG_CACHE_HOME=/data/sitearmy/cache/xdg
+ENV XDG_CONFIG_HOME=/data/config
 ENV XDG_DATA_HOME=/data
 
-VOLUME ["/data", "/config"]
+VOLUME ["/data"]
 EXPOSE 80 443 443/udp
 
 ENTRYPOINT ["python3", "/opt/sitearmy/sitearmy.py"]
